@@ -28,3 +28,7 @@ Temporary Items
 
 # IDE
 .idea
+
+# Executable files
+cmd/client/client
+cmd/server/server

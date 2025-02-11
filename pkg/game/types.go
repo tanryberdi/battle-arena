@@ -1,6 +1,7 @@
 package game
 
 import (
+	"log"
 	"math"
 	"sync"
 	"time"
@@ -90,22 +91,29 @@ func (c *Character) UpdatePosition(target Position, delta time.Duration) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// Calculate direction vector
 	dx := target.X - c.Position.X
 	dy := target.Y - c.Position.Y
 	distance := math.Sqrt(dx*dx + dy*dy)
 
 	if distance < 0.1 {
+		c.Position = target
 		return
 	}
 
+	// Normalize direction
 	dx /= distance
 	dy /= distance
 
+	// Calculate movement for this frame
 	moveAmount := c.MovementSpeed * delta.Seconds()
 	if moveAmount > distance {
 		moveAmount = distance
 	}
 
+	// Update position
 	c.Position.X += dx * moveAmount
 	c.Position.Y += dy * moveAmount
+
+	log.Printf("Character %s moved to (%f, %f)", c.ID, c.Position.X, c.Position.Y)
 }

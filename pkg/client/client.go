@@ -26,10 +26,12 @@ type GameClient struct {
 
 // NewGameClient creates a new game client
 func NewGameClient(serverAddr string) (*GameClient, error) {
+	log.Printf("Connecting to server at %s", serverAddr)
 	conn, err := net.Dial("tcp", serverAddr)
 	if err != nil {
 		return nil, err
 	}
+	log.Printf("Connected to server successfully")
 
 	return &GameClient{
 		conn:       conn,
@@ -53,10 +55,9 @@ func (c *GameClient) Start() error {
 
 	c.imd = imdraw.New(nil)
 
-	// Start receiving game state updates
 	go c.receiveUpdates()
 
-	// Main game loop
+	log.Printf("Starting game loop")
 	for !c.window.Closed() {
 		c.handleInput()
 		c.draw()
@@ -83,14 +84,15 @@ func (c *GameClient) receiveUpdates() {
 					// If this is our first update, set our player ID
 					if c.playerID == "" {
 						c.playerID = id
+						log.Printf("Received player ID: %s", id)
 					}
 
-					// Update or create character
+					pos := charMap["position"].(map[string]interface{})
 					char := &game.Character{
 						ID: id,
 						Position: game.Position{
-							X: charMap["position"].(map[string]interface{})["x"].(float64),
-							Y: charMap["position"].(map[string]interface{})["y"].(float64),
+							X: pos["x"].(float64),
+							Y: pos["y"].(float64),
 						},
 						Health:    charMap["health"].(float64),
 						MaxHealth: charMap["maxHealth"].(float64),
@@ -105,8 +107,11 @@ func (c *GameClient) receiveUpdates() {
 }
 
 func (c *GameClient) handleInput() {
-	if c.window.Pressed(pixelgl.MouseButtonLeft) {
+	if c.window.JustPressed(pixelgl.MouseButtonLeft) {
 		mousePos := c.window.MousePosition()
+		log.Printf("Mouse clicked at position: %v", mousePos)
+
+		// Simplified command structure
 		cmd := struct {
 			Type string  `json:"type"`
 			X    float64 `json:"x"`
@@ -118,8 +123,16 @@ func (c *GameClient) handleInput() {
 		}
 
 		data, err := json.Marshal(cmd)
-		if err == nil {
-			c.conn.Write(data)
+		if err != nil {
+			log.Printf("Error marshaling move command: %v", err)
+			return
+		}
+
+		log.Printf("Sending move command: %s", string(data))
+		_, err = c.conn.Write(append(data, '\n')) // Add newline for proper message separation
+		if err != nil {
+			log.Printf("Error sending move command: %v", err)
+			return
 		}
 	}
 }

@@ -7,20 +7,32 @@ import (
 	"time"
 )
 
-// Position represents a point in 2D space
+const (
+	WorldWidth  = 800
+	WorldHeight = 600
+
+	WarriorMaxHealth   = 150.0
+	WarriorAttackPower = 30.0
+	WarriorSpeed       = 3.0
+	WarriorAttackRange = 50.0
+
+	MageMaxHealth   = 100.0
+	MageAttackPower = 40.0
+	MageSpeed       = 2.5
+	MageAttackRange = 200.0
+)
+
 type Position struct {
 	X float64 `json:"x"`
 	Y float64 `json:"y"`
 }
 
-// Distance calculates the distance to another position
 func (p Position) Distance(other Position) float64 {
 	dx := p.X - other.X
 	dy := p.Y - other.Y
 	return math.Sqrt(dx*dx + dy*dy)
 }
 
-// CharacterClass represents different character types
 type CharacterClass int
 
 const (
@@ -28,16 +40,6 @@ const (
 	Mage
 )
 
-// Game world constants
-const (
-	WorldWidth  = 800
-	WorldHeight = 600
-
-	WarriorAttackRange = 50.0
-	MageAttackRange    = 200.0
-)
-
-// Character represents a player in the game
 type Character struct {
 	ID            string         `json:"id"`
 	Class         CharacterClass `json:"class"`
@@ -50,7 +52,6 @@ type Character struct {
 	mu            sync.RWMutex   `json:"-"`
 }
 
-// NewCharacter creates a new character
 func NewCharacter(id string, class CharacterClass, pos Position) *Character {
 	c := &Character{
 		ID:       id,
@@ -60,20 +61,36 @@ func NewCharacter(id string, class CharacterClass, pos Position) *Character {
 
 	switch class {
 	case Warrior:
-		c.MaxHealth = 150
-		c.AttackPower = 30
-		c.MovementSpeed = 3
+		c.MaxHealth = WarriorMaxHealth
+		c.AttackPower = WarriorAttackPower
+		c.MovementSpeed = WarriorSpeed
 	case Mage:
-		c.MaxHealth = 100
-		c.AttackPower = 40
-		c.MovementSpeed = 2.5
+		c.MaxHealth = MageMaxHealth
+		c.AttackPower = MageAttackPower
+		c.MovementSpeed = MageSpeed
 	}
 
 	c.Health = c.MaxHealth
 	return c
 }
 
-// TakeDamage applies damage to the character
+func (c *Character) SetPosition(pos Position) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Clamp position within world bounds
+	c.Position.X = math.Max(0, math.Min(WorldWidth, pos.X))
+	c.Position.Y = math.Max(0, math.Min(WorldHeight, pos.Y))
+
+	log.Printf("Character %s position set to (%f, %f)", c.ID, c.Position.X, c.Position.Y)
+}
+
+func (c *Character) GetPosition() Position {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.Position
+}
+
 func (c *Character) TakeDamage(amount float64) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -84,36 +101,4 @@ func (c *Character) TakeDamage(amount float64) bool {
 		return true // Character died
 	}
 	return false
-}
-
-// UpdatePosition moves the character
-func (c *Character) UpdatePosition(target Position, delta time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Calculate direction vector
-	dx := target.X - c.Position.X
-	dy := target.Y - c.Position.Y
-	distance := math.Sqrt(dx*dx + dy*dy)
-
-	if distance < 0.1 {
-		c.Position = target
-		return
-	}
-
-	// Normalize direction
-	dx /= distance
-	dy /= distance
-
-	// Calculate movement for this frame
-	moveAmount := c.MovementSpeed * delta.Seconds()
-	if moveAmount > distance {
-		moveAmount = distance
-	}
-
-	// Update position
-	c.Position.X += dx * moveAmount
-	c.Position.Y += dy * moveAmount
-
-	log.Printf("Character %s moved to (%f, %f)", c.ID, c.Position.X, c.Position.Y)
 }

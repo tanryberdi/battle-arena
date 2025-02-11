@@ -3,8 +3,10 @@ package client
 import (
 	"encoding/json"
 	"log"
+	"math"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/faiface/pixel"
 	"github.com/faiface/pixel/imdraw"
@@ -14,7 +16,6 @@ import (
 	"battle-arena/pkg/game"
 )
 
-// GameClient represents the game client
 type GameClient struct {
 	conn       net.Conn
 	characters map[string]*game.Character
@@ -24,7 +25,6 @@ type GameClient struct {
 	mu         sync.RWMutex
 }
 
-// NewGameClient creates a new game client
 func NewGameClient(serverAddr string) (*GameClient, error) {
 	log.Printf("Connecting to server at %s", serverAddr)
 	conn, err := net.Dial("tcp", serverAddr)
@@ -39,7 +39,6 @@ func NewGameClient(serverAddr string) (*GameClient, error) {
 	}, nil
 }
 
-// Start initializes and starts the game client
 func (c *GameClient) Start() error {
 	cfg := pixelgl.WindowConfig{
 		Title:  "Battle Arena",
@@ -55,16 +54,107 @@ func (c *GameClient) Start() error {
 
 	c.imd = imdraw.New(nil)
 
+	// Start receiving game state updates
 	go c.receiveUpdates()
+
+	// Game loop
+	ticker := time.NewTicker(time.Second / 60) // 60 FPS
+	defer ticker.Stop()
 
 	log.Printf("Starting game loop")
 	for !c.window.Closed() {
 		c.handleInput()
 		c.draw()
 		c.window.Update()
+		<-ticker.C
 	}
 
 	return nil
+}
+
+func (c *GameClient) handleInput() {
+	// Handle mouse movement
+	if c.window.JustPressed(pixelgl.MouseButtonLeft) {
+		mousePos := c.window.MousePosition()
+		log.Printf("Mouse clicked at position: %v", mousePos)
+
+		moveCmd := struct {
+			Type string  `json:"type"`
+			X    float64 `json:"x"`
+			Y    float64 `json:"y"`
+		}{
+			Type: "move",
+			X:    mousePos.X,
+			Y:    mousePos.Y,
+		}
+
+		data, err := json.Marshal(moveCmd)
+		if err != nil {
+			log.Printf("Error marshaling move command: %v", err)
+			return
+		}
+		data = append(data, '\n')
+		c.conn.Write(data)
+	}
+
+	// Handle keyboard movement
+	if c.playerID != "" {
+		c.mu.RLock()
+		char, exists := c.characters[c.playerID]
+		c.mu.RUnlock()
+
+		if exists {
+			var newPos game.Position
+			moveSpeed := 5.0 // Movement speed per frame
+			moved := false
+
+			// Get current position
+			newPos = char.Position
+
+			// Check keyboard input
+			if c.window.Pressed(pixelgl.KeyLeft) || c.window.Pressed(pixelgl.KeyA) {
+				newPos.X -= moveSpeed
+				moved = true
+			}
+			if c.window.Pressed(pixelgl.KeyRight) || c.window.Pressed(pixelgl.KeyD) {
+				newPos.X += moveSpeed
+				moved = true
+			}
+			if c.window.Pressed(pixelgl.KeyUp) || c.window.Pressed(pixelgl.KeyW) {
+				newPos.Y += moveSpeed
+				moved = true
+			}
+			if c.window.Pressed(pixelgl.KeyDown) || c.window.Pressed(pixelgl.KeyS) {
+				newPos.Y -= moveSpeed
+				moved = true
+			}
+
+			// If any movement key was pressed, send the move command
+			if moved {
+				// Clamp position to world bounds
+				newPos.X = math.Max(0, math.Min(game.WorldWidth, newPos.X))
+				newPos.Y = math.Max(0, math.Min(game.WorldHeight, newPos.Y))
+
+				moveCmd := struct {
+					Type string  `json:"type"`
+					X    float64 `json:"x"`
+					Y    float64 `json:"y"`
+				}{
+					Type: "move",
+					X:    newPos.X,
+					Y:    newPos.Y,
+				}
+
+				data, err := json.Marshal(moveCmd)
+				if err != nil {
+					log.Printf("Error marshaling move command: %v", err)
+					return
+				}
+				data = append(data, '\n')
+				c.conn.Write(data)
+			}
+		}
+	}
 }
 
 func (c *GameClient) receiveUpdates() {
@@ -76,12 +166,10 @@ func (c *GameClient) receiveUpdates() {
 			return
 		}
 
-		// Update characters
 		if chars, ok := state["characters"].(map[string]interface{}); ok {
 			c.mu.Lock()
 			for id, charData := range chars {
 				if charMap, ok := charData.(map[string]interface{}); ok {
-					// If this is our first update, set our player ID
 					if c.playerID == "" {
 						c.playerID = id
 						log.Printf("Received player ID: %s", id)
@@ -106,37 +194,6 @@ func (c *GameClient) receiveUpdates() {
 	}
 }
 
-func (c *GameClient) handleInput() {
-	if c.window.JustPressed(pixelgl.MouseButtonLeft) {
-		mousePos := c.window.MousePosition()
-		log.Printf("Mouse clicked at position: %v", mousePos)
-
-		// Simplified command structure
-		cmd := struct {
-			Type string  `json:"type"`
-			X    float64 `json:"x"`
-			Y    float64 `json:"y"`
-		}{
-			Type: "move",
-			X:    mousePos.X,
-			Y:    mousePos.Y,
-		}
-
-		data, err := json.Marshal(cmd)
-		if err != nil {
-			log.Printf("Error marshaling move command: %v", err)
-			return
-		}
-
-		log.Printf("Sending move command: %s", string(data))
-		_, err = c.conn.Write(append(data, '\n')) // Add newline for proper message separation
-		if err != nil {
-			log.Printf("Error sending move command: %v", err)
-			return
-		}
-	}
-}
-
 func (c *GameClient) draw() {
 	c.window.Clear(colornames.Black)
 	c.imd.Clear()
@@ -149,7 +206,7 @@ func (c *GameClient) draw() {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	// Draw all characters
+	// Draw characters
 	for id, char := range c.characters {
 		isPlayer := id == c.playerID
 		pos := pixel.V(char.Position.X, char.Position.Y)
@@ -180,21 +237,7 @@ func (c *GameClient) draw() {
 		c.imd.Color = pixel.RGB(1-healthPerc, healthPerc, 0)
 		c.imd.Push(healthPos, healthPos.Add(pixel.V(healthWidth*healthPerc, healthHeight)))
 		c.imd.Rectangle(0)
-
-		// Draw character class indicator
-		switch char.Class {
-		case game.Warrior:
-			c.drawAttackRange(pos, game.WarriorAttackRange)
-		case game.Mage:
-			c.drawAttackRange(pos, game.MageAttackRange)
-		}
 	}
 
 	c.imd.Draw(c.window)
-}
-
-func (c *GameClient) drawAttackRange(pos pixel.Vec, radius float64) {
-	c.imd.Color = pixel.RGB(0.2, 0.2, 0.2)
-	c.imd.Push(pos)
-	c.imd.Circle(radius, 1)
 }

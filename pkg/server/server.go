@@ -14,26 +14,12 @@ import (
 	"github.com/google/uuid"
 )
 
-// GameServer represents the main server instance
 type GameServer struct {
 	World   *game.World
 	clients map[string]net.Conn
 	mu      sync.RWMutex
 }
 
-// Message represents a client-server message
-type Message struct {
-	Type string          `json:"type"`
-	Data json.RawMessage `json:"data"`
-}
-
-// MoveCommand represents a movement command from client
-type MoveCommand struct {
-	X float64 `json:"x"`
-	Y float64 `json:"y"`
-}
-
-// NewGameServer creates a new game server instance
 func NewGameServer() *GameServer {
 	return &GameServer{
 		World:   game.NewWorld(),
@@ -41,7 +27,6 @@ func NewGameServer() *GameServer {
 	}
 }
 
-// Start begins the server on the specified port
 func (s *GameServer) Start(port string) error {
 	listener, err := net.Listen("tcp", ":"+port)
 	if err != nil {
@@ -67,7 +52,7 @@ func (s *GameServer) handleConnection(conn net.Conn) {
 	playerID := uuid.New().String()
 	log.Printf("New player connected: %s", playerID)
 
-	// Create new character
+	// Create character
 	char := game.NewCharacter(
 		playerID,
 		game.CharacterClass(rand.Intn(2)),
@@ -80,30 +65,35 @@ func (s *GameServer) handleConnection(conn net.Conn) {
 	s.clients[playerID] = conn
 	s.mu.Unlock()
 
+	// Send initial state
 	s.sendGameState(conn)
 
-	// Handle incoming messages
 	scanner := bufio.NewScanner(conn)
 	for scanner.Scan() {
+		line := scanner.Text()
+		log.Printf("Received raw message from %s: %s", playerID, line)
+
 		var cmd struct {
 			Type string  `json:"type"`
 			X    float64 `json:"x"`
 			Y    float64 `json:"y"`
 		}
 
-		if err := json.Unmarshal(scanner.Bytes(), &cmd); err != nil {
-			log.Printf("Error decoding message: %v", err)
+		if err := json.Unmarshal([]byte(line), &cmd); err != nil {
+			log.Printf("Error decoding message from %s: %v", playerID, err)
 			continue
 		}
 
-		log.Printf("Received command from %s: %+v", playerID, cmd)
+		log.Printf("Decoded command from %s: %+v", playerID, cmd)
 
-		switch cmd.Type {
-		case "move":
-			if char := s.World.GetCharacter(playerID); char != nil {
-				target := game.Position{X: cmd.X, Y: cmd.Y}
-				log.Printf("Moving player %s to position: (%f, %f)", playerID, target.X, target.Y)
-				char.UpdatePosition(target, 16*time.Millisecond)
+		if cmd.Type == "move" {
+			char := s.World.GetCharacter(playerID)
+			if char != nil {
+				newPos := game.Position{X: cmd.X, Y: cmd.Y}
+				log.Printf("Moving player %s to position: (%f, %f)", playerID, newPos.X, newPos.Y)
+
+				char.SetPosition(newPos)
+				log.Printf("Player %s new position: (%f, %f)", playerID, char.GetPosition().X, char.GetPosition().Y)
 			}
 		}
 	}
@@ -121,7 +111,9 @@ func (s *GameServer) handleConnection(conn net.Conn) {
 }
 
 func (s *GameServer) gameLoop() {
-	ticker := time.NewTicker(16 * time.Millisecond)
+	ticker := time.NewTicker(time.Second / 60) // 60 FPS
+	defer ticker.Stop()
+
 	for range ticker.C {
 		s.World.ProcessCombat()
 		s.broadcastGameState()
@@ -129,29 +121,37 @@ func (s *GameServer) gameLoop() {
 }
 
 func (s *GameServer) broadcastGameState() {
-	state := make(map[string]interface{})
-	state["characters"] = s.World.GetCharacters()
+	state := map[string]interface{}{
+		"characters": s.World.GetCharacters(),
+	}
 
 	data, err := json.Marshal(state)
 	if err != nil {
+		log.Printf("Error marshaling game state: %v", err)
 		return
 	}
 
 	s.mu.RLock()
-	for _, conn := range s.clients {
-		conn.Write(data)
+	for id, conn := range s.clients {
+		if _, err := conn.Write(append(data, '\n')); err != nil {
+			log.Printf("Error sending state to player %s: %v", id, err)
+		}
 	}
 	s.mu.RUnlock()
 }
 
 func (s *GameServer) sendGameState(conn net.Conn) {
-	state := make(map[string]interface{})
-	state["characters"] = s.World.GetCharacters()
+	state := map[string]interface{}{
+		"characters": s.World.GetCharacters(),
+	}
 
 	data, err := json.Marshal(state)
 	if err != nil {
+		log.Printf("Error marshaling game state: %v", err)
 		return
 	}
 
-	conn.Write(data)
+	if _, err := conn.Write(append(data, '\n')); err != nil {
+		log.Printf("Error sending initial state: %v", err)
+	}
 }

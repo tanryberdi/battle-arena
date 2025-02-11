@@ -92,7 +92,7 @@ make run-client PORT=9000
 # Project Structure
 
 ```
-battlearena/
+battle-arena/
 ├── cmd/
 │   ├── client/
 │   │   └── main.go
